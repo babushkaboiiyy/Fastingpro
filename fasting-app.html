@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Fast Ritual</title>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Mono:wght@300;400&display=swap" rel="stylesheet"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0c0b; }
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: #111; }
+    ::-webkit-scrollbar-thumb { background: #3a3a30; border-radius: 2px; }
+    .nav-btn {
+      background: none; border: none; cursor: pointer; padding: 8px 14px;
+      font-family: 'DM Mono', monospace; font-size: 11px; letter-spacing: 0.1em;
+      text-transform: uppercase; transition: all 0.2s;
+    }
+    .action-btn {
+      background: none; cursor: pointer; border-radius: 50px;
+      font-family: 'DM Serif Display', serif; font-size: 16px;
+      letter-spacing: 0.05em; transition: all 0.3s; position: relative; overflow: hidden;
+    }
+    .action-btn::before {
+      content: ''; position: absolute; inset: 0;
+      background: rgba(255,255,255,0.07); opacity: 0; transition: opacity 0.2s;
+    }
+    .action-btn:hover::before { opacity: 1; }
+    .goal-chip {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px; padding: 10px 16px; cursor: pointer;
+      transition: all 0.2s; font-family: 'DM Mono', monospace;
+      display: flex; flex-direction: column; align-items: center; gap: 2px;
+    }
+    .goal-chip:hover, .goal-chip.active {
+      background: rgba(139,170,80,0.18); border-color: rgba(139,170,80,0.5);
+    }
+    .goal-chip:disabled { opacity: 0.5; cursor: not-allowed; }
+    .fast-ring { transition: stroke-dashoffset 0.5s ease; }
+    .pulse-anim { animation: pulseOnce 0.8s ease-out; }
+    @keyframes pulseOnce {
+      0% { transform: scale(1); } 50% { transform: scale(1.04); } 100% { transform: scale(1); }
+    }
+    @keyframes breathe {
+      0%, 100% { opacity: 0.7; } 50% { opacity: 1; }
+    }
+    .breathing { animation: breathe 3s ease-in-out infinite; }
+    .history-row {
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.07);
+      border-radius: 10px; padding: 14px 18px; display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 8px;
+    }
+    .clear-btn {
+      margin-top: 16px; background: none; border: 1px solid rgba(200,80,60,0.3);
+      color: rgba(200,100,80,0.6); border-radius: 8px; padding: 8px 16px;
+      font-family: 'DM Mono', monospace; font-size: 10px; cursor: pointer;
+      letter-spacing: 0.1em;
+    }
+    .clear-btn:hover { background: rgba(200,80,60,0.08); }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+const FASTING_GOALS = [
+  { label: "12:12", hours: 12, desc: "Beginner" },
+  { label: "16:8",  hours: 16, desc: "Popular" },
+  { label: "18:6",  hours: 18, desc: "Intermediate" },
+  { label: "20:4",  hours: 20, desc: "Advanced" },
+  { label: "OMAD",  hours: 23, desc: "One Meal" },
+];
+
+const STAGES = [
+  { hour:  0, name: "Fed State",          icon: "🍽️", desc: "Body digesting food, insulin elevated" },
+  { hour:  4, name: "Post-Absorptive",    icon: "⚡", desc: "Blood sugar normalizing, digestion complete" },
+  { hour:  8, name: "Glycogen Depletion", icon: "🔥", desc: "Liver glycogen depleting, fat burn begins" },
+  { hour: 12, name: "Ketosis Begins",     icon: "✨", desc: "Ketones rising, mental clarity improving" },
+  { hour: 16, name: "Deep Ketosis",       icon: "🌙", desc: "Significant fat burning, autophagy activated" },
+  { hour: 20, name: "Autophagy Peak",     icon: "🧬", desc: "Cell cleanup at maximum, deep metabolic reset" },
+  { hour: 24, name: "Extended Fast",      icon: "🌟", desc: "Growth hormone elevated, deep cellular renewal" },
+];
+
+function getStage(elapsedHours) {
+  let current = STAGES[0];
+  for (const s of STAGES) { if (elapsedHours >= s.hour) current = s; }
+  return current;
+}
+
+function formatDuration(ms) {
+  const totalSecs = Math.floor(ms / 1000);
+  const h = Math.floor(totalSecs / 3600);
+  const m = Math.floor((totalSecs % 3600) / 60);
+  const s = totalSecs % 60;
+  return { h, m, s };
+}
+
+function pad(n) { return String(n).padStart(2, "0"); }
+
+function loadLocal(key, fallback) {
+  try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; }
+  catch { return fallback; }
+}
+function saveLocal(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+}
+
+function App() {
+  const [fastStart,   setFastStart]   = useState(() => loadLocal("fr:fastStart", null));
+  const [goalHours,   setGoalHours]   = useState(() => loadLocal("fr:goal", 16));
+  const [now,         setNow]         = useState(Date.now());
+  const [history,     setHistory]     = useState(() => loadLocal("fr:history", []));
+  const [view,        setView]        = useState("home");
+  const [pulseRing,   setPulseRing]   = useState(false);
+
+  useEffect(() => { saveLocal("fr:fastStart", fastStart); }, [fastStart]);
+  useEffect(() => { saveLocal("fr:goal", goalHours); },     [goalHours]);
+  useEffect(() => { saveLocal("fr:history", history); },    [history]);
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsed      = fastStart ? now - fastStart : 0;
+  const elapsedHours = elapsed / 3600000;
+  const goalMs       = goalHours * 3600000;
+  const progress     = Math.min(elapsedHours / goalHours, 1);
+  const isComplete   = !!fastStart && elapsed >= goalMs;
+  const remaining    = fastStart ? Math.max(0, goalMs - elapsed) : goalMs;
+  const { h, m, s }  = formatDuration(elapsed);
+  const { h: rh, m: rm, s: rs } = formatDuration(remaining);
+  const stage        = getStage(elapsedHours);
+
+  const R = 120, C = 2 * Math.PI * R;
+  const dash = C * progress, gap = C - dash;
+  const angle = progress * 360 - 90;
+  const rad   = (angle * Math.PI) / 180;
+  const dotX  = 160 + R * Math.cos(rad);
+  const dotY  = 160 + R * Math.sin(rad);
+
+  function startFast() {
+    setFastStart(Date.now());
+    setPulseRing(true);
+    setTimeout(() => setPulseRing(false), 900);
+  }
+
+  function stopFast() {
+    if (!fastStart) return;
+    const entry = {
+      id: Date.now(), start: fastStart, end: Date.now(),
+      duration: elapsed, goal: goalHours, completed: elapsed >= goalMs,
+    };
+    setHistory(prev => [entry, ...prev].slice(0, 30));
+    setFastStart(null);
+  }
+
+  const avgDuration    = history.length ? history.reduce((a,b) => a + b.duration, 0) / history.length / 3600000 : 0;
+  const completedFasts = history.filter(h => h.completed).length;
+  const longestFast    = history.length ? Math.max(...history.map(h => h.duration)) / 3600000 : 0;
+
+  const accentColor = isComplete ? "#d4a840" : "#8ab840";
+
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0a0c0b",
+      fontFamily: "'DM Serif Display', Georgia, serif",
+      color: "#e8e0d0", display: "flex", flexDirection: "column",
+      alignItems: "center", position: "relative", overflowX: "hidden",
+    }}>
+      {/* Background blobs */}
+      <div style={{
+        position:"fixed", inset:0, pointerEvents:"none",
+        background:`
+          radial-gradient(ellipse 60% 50% at 20% 20%, rgba(74,111,65,0.12) 0%, transparent 60%),
+          radial-gradient(ellipse 50% 60% at 80% 80%, rgba(139,90,43,0.10) 0%, transparent 60%)
+        `,
+      }}/>
+
+      {/* Header */}
+      <header style={{
+        width:"100%", maxWidth:480, padding:"20px 24px 0",
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+      }}>
+        <div>
+          <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, letterSpacing:"0.2em", color:"#6a7a5a", textTransform:"uppercase" }}>
+            FAST RITUAL
+          </div>
+          <div style={{ fontSize:22, color:"#d4c8a8", marginTop:1 }}>Nourish the Fast</div>
+        </div>
+        <div style={{ display:"flex", gap:4 }}>
+          {[["home","⊙"],["stats","◈"],["settings","◇"]].map(([v,icon]) => (
+            <button key={v} className="nav-btn" onClick={() => setView(v)} style={{
+              color: view===v ? "#a8c060" : "#5a6a50",
+              borderBottom: view===v ? "1.5px solid #a8c060" : "1.5px solid transparent",
+            }}>{icon}</button>
+          ))}
+        </div>
+      </header>
+
+      <main style={{ width:"100%", maxWidth:480, padding:"24px 24px 100px", flex:1 }}>
+
+        {/* ── HOME ── */}
+        {view === "home" && <>
+
+          {/* Stage banner */}
+          <div style={{
+            background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)",
+            borderRadius:12, padding:"12px 18px", marginBottom:28,
+            display:"flex", alignItems:"center", gap:12,
+          }}>
+            <span style={{ fontSize:24 }}>{stage.icon}</span>
+            <div>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#8a9a70", letterSpacing:"0.1em", textTransform:"uppercase" }}>Current Stage</div>
+              <div style={{ fontSize:17, color:"#d4c8a8" }}>{stage.name}</div>
+              <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", marginTop:2 }}>{stage.desc}</div>
+            </div>
+          </div>
+
+          {/* Ring */}
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:24 }}
+               className={pulseRing ? "pulse-anim" : ""}>
+            <svg width="320" height="320" viewBox="0 0 320 320">
+              <circle cx="160" cy="160" r="148" fill="none" stroke="rgba(255,255,255,0.03)" strokeWidth="1"/>
+              <circle cx="160" cy="160" r="138" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="0.5" strokeDasharray="4 8"/>
+              <circle cx="160" cy="160" r={R} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth="14" strokeLinecap="round"/>
+              {fastStart && (
+                <circle cx="160" cy="160" r={R} fill="none"
+                  stroke={accentColor} strokeWidth="14" strokeLinecap="round"
+                  strokeDasharray={`${dash} ${gap}`} strokeDashoffset={C*0.25}
+                  style={{ filter:`drop-shadow(0 0 8px ${accentColor}70)`, transition:"stroke-dasharray 0.5s" }}/>
+              )}
+              {fastStart && progress > 0.02 && (
+                <circle cx={dotX} cy={dotY} r="7" fill={accentColor}
+                  style={{ filter:`drop-shadow(0 0 6px ${accentColor})` }}/>
+              )}
+              <text x="160" y="143" textAnchor="middle" fill="#d4c8a8"
+                    style={{ fontFamily:"'DM Mono',monospace", fontSize:38, fontWeight:300 }}>
+                {fastStart ? `${pad(h)}:${pad(m)}` : "--:--"}
+              </text>
+              {fastStart && (
+                <text x="160" y="167" textAnchor="middle" fill="#8a9a70"
+                      style={{ fontFamily:"'DM Mono',monospace", fontSize:16 }}>
+                  :{pad(s)}
+                </text>
+              )}
+              <text x="160" y="192" textAnchor="middle" fill="#5a6a50"
+                    style={{ fontFamily:"'DM Mono',monospace", fontSize:10, letterSpacing:"0.15em" }}>
+                {fastStart ? (isComplete ? "GOAL REACHED" : "HOURS ELAPSED") : "NOT FASTING"}
+              </text>
+              <text x="160" y="217" textAnchor="middle" fill={accentColor}
+                    style={{ fontFamily:"'DM Serif Display',serif", fontSize:15 }}>
+                {fastStart ? `${Math.round(progress*100)}% of ${goalHours}h goal` : "Tap to begin"}
+              </text>
+            </svg>
+          </div>
+
+          {/* Remaining / complete */}
+          {fastStart && !isComplete && (
+            <div style={{ textAlign:"center", marginBottom:20, fontFamily:"'DM Mono',monospace", fontSize:12, color:"#6a7a5a", letterSpacing:"0.1em" }}>
+              <span className="breathing">{rh}h {rm}m {rs}s remaining</span>
+            </div>
+          )}
+          {isComplete && (
+            <div style={{ textAlign:"center", marginBottom:20, fontSize:14, color:"#d4a840", fontFamily:"'DM Mono',monospace", letterSpacing:"0.05em" }}>
+              ✦ Fast goal achieved ✦
+            </div>
+          )}
+
+          {/* Action button */}
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:28 }}>
+            <button className="action-btn" onClick={fastStart ? stopFast : startFast} style={{
+              padding:"16px 52px",
+              border:`1.5px solid ${fastStart ? "rgba(200,100,80,0.6)" : "rgba(139,184,64,0.6)"}`,
+              color: fastStart ? "#e08070" : "#a8c060",
+              fontSize:15, letterSpacing:"0.08em",
+              background: fastStart ? "rgba(200,100,80,0.08)" : "rgba(139,184,64,0.08)",
+            }}>
+              {fastStart ? "End Fast" : "Begin Fast"}
+            </button>
+          </div>
+
+          {/* Goal chips */}
+          <div style={{ marginBottom:20 }}>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.15em", textTransform:"uppercase", marginBottom:10, textAlign:"center" }}>
+              Fasting Protocol
+            </div>
+            <div style={{ display:"flex", gap:8, justifyContent:"center", flexWrap:"wrap" }}>
+              {FASTING_GOALS.map(g => (
+                <button key={g.hours} className={`goal-chip ${goalHours===g.hours?"active":""}`}
+                        onClick={() => !fastStart && setGoalHours(g.hours)}
+                        disabled={!!fastStart}>
+                  <span style={{ fontSize:13, color:"#d4c8a8" }}>{g.label}</span>
+                  <span style={{ fontSize:9, color:"#6a7a5a" }}>{g.desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Stages timeline */}
+          <div style={{ background:"rgba(255,255,255,0.02)", border:"1px solid rgba(255,255,255,0.06)", borderRadius:12, padding:"16px 18px" }}>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.15em", textTransform:"uppercase", marginBottom:14 }}>
+              Fasting Stages
+            </div>
+            {STAGES.map((st, i) => {
+              const active = st === stage && !!fastStart;
+              const past   = !!fastStart && elapsedHours >= st.hour;
+              return (
+                <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:12, marginBottom:10, opacity:past?1:0.35, transition:"opacity 0.5s" }}>
+                  <div style={{
+                    width:28, height:28, borderRadius:"50%", flexShrink:0,
+                    background: active ? "rgba(139,184,64,0.2)" : past ? "rgba(255,255,255,0.06)" : "transparent",
+                    border: active ? "1.5px solid #8ab840" : past ? "1px solid rgba(255,255,255,0.15)" : "1px solid rgba(255,255,255,0.07)",
+                    display:"flex", alignItems:"center", justifyContent:"center", fontSize:13,
+                  }}>{st.icon}</div>
+                  <div style={{ flex:1 }}>
+                    <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:active?"#a8c060":"#8a9a70", letterSpacing:"0.05em" }}>
+                      {st.hour}h — {st.name}
+                    </div>
+                    <div style={{ fontSize:11, color:"#5a6a50", marginTop:1, fontFamily:"'DM Mono',monospace" }}>
+                      {st.desc}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>}
+
+        {/* ── STATS ── */}
+        {view === "stats" && <>
+          <div style={{ fontSize:22, color:"#d4c8a8", marginBottom:24 }}>Your Journey</div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:10, marginBottom:28 }}>
+            {[
+              { label:"Total Fasts",  value: history.length },
+              { label:"Completed",    value: completedFasts },
+              { label:"Longest",      value: longestFast.toFixed(1)+"h" },
+            ].map(card => (
+              <div key={card.label} style={{ background:"rgba(255,255,255,0.04)", border:"1px solid rgba(255,255,255,0.08)", borderRadius:10, padding:"14px 12px", textAlign:"center" }}>
+                <div style={{ fontSize:22, color:"#d4c8a8", fontFamily:"'DM Mono',monospace", fontWeight:300 }}>{card.value}</div>
+                <div style={{ fontSize:9, color:"#6a7a5a", fontFamily:"'DM Mono',monospace", letterSpacing:"0.1em", textTransform:"uppercase", marginTop:4 }}>{card.label}</div>
+              </div>
+            ))}
+          </div>
+
+          {history.length > 0 && (
+            <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:10, padding:"14px 18px", marginBottom:20 }}>
+              <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
+                <span style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.1em", textTransform:"uppercase" }}>Avg Duration</span>
+                <span style={{ fontFamily:"'DM Mono',monospace", fontSize:12, color:"#a8c060" }}>{avgDuration.toFixed(1)}h</span>
+              </div>
+              <div style={{ height:4, background:"rgba(255,255,255,0.07)", borderRadius:4 }}>
+                <div style={{ height:"100%", borderRadius:4, width:`${Math.min(avgDuration/24*100,100)}%`, background:"linear-gradient(90deg, #6a9030, #a8c060)", transition:"width 1s ease" }}/>
+              </div>
+            </div>
+          )}
+
+          <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.15em", textTransform:"uppercase", marginBottom:12 }}>History</div>
+
+          {history.length === 0 ? (
+            <div style={{ textAlign:"center", color:"#4a5a40", fontFamily:"'DM Mono',monospace", fontSize:12, padding:"40px 0" }}>
+              No fasts completed yet.<br/>Begin your first ritual.
+            </div>
+          ) : history.map(entry => {
+            const dur  = entry.duration / 3600000;
+            const date = new Date(entry.end);
+            return (
+              <div key={entry.id} className="history-row">
+                <div style={{ display:"flex", alignItems:"center", gap:12 }}>
+                  <span style={{ fontSize:16 }}>{entry.completed ? "✦" : "◇"}</span>
+                  <div>
+                    <div style={{ fontFamily:"'DM Mono',monospace", fontSize:12, color:"#d4c8a8" }}>
+                      {dur.toFixed(1)}h
+                      <span style={{ color:entry.completed?"#a8c060":"#8a7060", marginLeft:8, fontSize:10 }}>
+                        {entry.completed ? "complete" : "partial"}
+                      </span>
+                    </div>
+                    <div style={{ fontFamily:"'DM Mono',monospace", fontSize:9, color:"#5a6a50" }}>
+                      {date.toLocaleDateString("en-US",{month:"short",day:"numeric"})} · Goal {entry.goal}h
+                    </div>
+                  </div>
+                </div>
+                <div style={{ width:40, height:40, borderRadius:"50%", background:"rgba(255,255,255,0.04)", display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'DM Mono',monospace", fontSize:10, color:"#8a9a70" }}>
+                  {Math.round(entry.duration / entry.goal / 3600000 * 100)}%
+                </div>
+              </div>
+            );
+          })}
+
+          {history.length > 0 && (
+            <button className="clear-btn" onClick={() => { if(window.confirm("Clear all history?")) setHistory([]); }}>
+              CLEAR HISTORY
+            </button>
+          )}
+        </>}
+
+        {/* ── SETTINGS ── */}
+        {view === "settings" && <>
+          <div style={{ fontSize:22, color:"#d4c8a8", marginBottom:24 }}>Ritual Settings</div>
+
+          <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:12, padding:"20px", marginBottom:16 }}>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:16 }}>
+              Default Protocol
+            </div>
+            <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+              {FASTING_GOALS.map(g => (
+                <button key={g.hours} className={`goal-chip ${goalHours===g.hours?"active":""}`}
+                        onClick={() => !fastStart && setGoalHours(g.hours)}
+                        disabled={!!fastStart}>
+                  <span style={{ fontSize:13, color:"#d4c8a8" }}>{g.label}</span>
+                  <span style={{ fontSize:9, color:"#6a7a5a" }}>{g.hours}h</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background:"rgba(255,255,255,0.03)", border:"1px solid rgba(255,255,255,0.07)", borderRadius:12, padding:"20px" }}>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:10, color:"#6a7a5a", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:12 }}>About</div>
+            <div style={{ fontFamily:"'DM Mono',monospace", fontSize:11, color:"#5a7050", lineHeight:1.8 }}>
+              Fast Ritual tracks your intermittent<br/>fasting journey with clarity and intention.<br/><br/>
+              All data is stored locally in your browser.<br/>Nothing is ever sent to a server.
+            </div>
+          </div>
+        </>}
+
+      </main>
+
+      {/* Bottom nav */}
+      <nav style={{
+        position:"fixed", bottom:0, left:"50%", transform:"translateX(-50%)",
+        width:"100%", maxWidth:480, background:"rgba(10,12,11,0.92)",
+        backdropFilter:"blur(12px)", borderTop:"1px solid rgba(255,255,255,0.07)",
+        display:"flex", justifyContent:"space-around", padding:"10px 0 16px",
+      }}>
+        {[["home","⊙","Fast"],["stats","◈","Stats"],["settings","◇","Settings"]].map(([id,icon,label]) => (
+          <button key={id} onClick={() => setView(id)} style={{ background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:3 }}>
+            <span style={{ fontSize:18, color:view===id?"#a8c060":"#4a5a40" }}>{icon}</span>
+            <span style={{ fontFamily:"'DM Mono',monospace", fontSize:9, letterSpacing:"0.1em", color:view===id?"#8ab040":"#4a5a40", textTransform:"uppercase" }}>{label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
